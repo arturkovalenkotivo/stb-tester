@@ -510,8 +510,7 @@ class SinkPipeline():
             # appsrc is backed-up, perhaps something's gone wrong.  We don't
             # want to use up all RAM, so let's drop the buffer on the floor.
             if not self._appsrc_was_full:
-                warn("sink pipeline appsrc is full, dropping buffers from now "
-                     "on")
+                debug("sink pipeline appsrc is full, dropping buffers from now on")
                 self._appsrc_was_full = True
             return
         elif self._appsrc_was_full:

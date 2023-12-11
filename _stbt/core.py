@@ -317,7 +317,7 @@ def _mainloop():
         else:
             thread_checker = thread.isAlive
         debug("teardown: Exiting (GLib mainloop %s)" % (
-              "is still alive!" if thread.thread_checker() else "ok"))
+              "is still alive!" if thread_checker() else "ok"))
 
 
 def _draw_annotation(img, annotation):

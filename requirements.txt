@@ -1,0 +1,3 @@
+pycairo
+scikit-build
+PyGObject==3.38.0

@@ -43,7 +43,7 @@ extentions = [Extension('_stbt.libstbt',
               ]
 setup(
     name="stbt_core",
-    version="133.0.1",
+    version="134.0.0",
     author="Stb-tester.com Ltd.",
     author_email="support@stb-tester.com",
     description="Automated GUI testing for Set-Top Boxes, with MacOS and Linux MOD",
@@ -63,7 +63,7 @@ setup(
         "Programming Language :: Python :: 3.6",
         "Topic :: Software Development :: Testing",
     ],
-    python_requires=">=3.6",
+    python_requires=">=3.9",
     extras_require={
         "ocr": ["lxml==4.8.0"],
         "debug": ["Jinja2==3.0.3"],
@@ -75,5 +75,8 @@ setup(
         "isort==5.6.4",
         "opencv-python~=4.5",
         "pylint~=2.13.0",
+        "PyGObject==3.38.0",
+        "scikit-build",
+        "pycairo",
     ],
 )

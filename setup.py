@@ -78,5 +78,6 @@ setup(
         "PyGObject==3.38.0",
         "scikit-build",
         "pycairo",
+        "requests",
     ],
 )

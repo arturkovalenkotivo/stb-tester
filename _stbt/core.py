@@ -510,8 +510,7 @@ class SinkPipeline():
             # appsrc is backed-up, perhaps something's gone wrong.  We don't
             # want to use up all RAM, so let's drop the buffer on the floor.
             if not self._appsrc_was_full:
-                warn("sink pipeline appsrc is full, dropping buffers from now "
-                     "on")
+                warn("sink pipeline appsrc is full, dropping buffers from now on")
                 self._appsrc_was_full = True
             return
         elif self._appsrc_was_full:
@@ -703,7 +702,7 @@ class Display():
                 audio_chunks.append(audio_data)
                 audio_chunks_pts.append(audio_pts)
             else:
-                self._audio_queue.appendleft((audio_pts, audio_data))  # Put back the last unmatched audio
+                # self._audio_queue.appendleft((audio_pts, audio_data))  # Put back the last unmatched audio
                 break
         if audio_chunks:
             combined_chunks = b"".join(audio_chunks)
@@ -738,13 +737,13 @@ class Display():
         if success:
             audio_data = map_info.data
             buffer.unmap(map_info)
-            self._audio_queue.put((sample.time, audio_data))
+            self._audio_queue.append((sample.time, audio_data))
         if not self._audio_structure:
             caps = sample.get_caps()
             structure = caps.get_structure(0)
             frame_rate = structure.get_int("rate")[1]
             channels = structure.get_int("channels")[1]
-            _format = structure.get_int("format")[1]
+            _format = structure.get_string("format")
             if "16" in _format:
                 sample_width = 2
             elif "32" in _format:

@@ -455,4 +455,4 @@ class Keypress():
         return (
             "Keypress(key=%r, start_time=%r, end_time=%r, frame_before=%s)" % (
                 self.key, self.start_time, self.end_time,
-                _frame_repr(self.frame_before)))
+                f"<Frame(time={self.frame_before.time})>"))

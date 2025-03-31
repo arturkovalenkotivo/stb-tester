@@ -37,7 +37,7 @@ def warn(s):
 def get_debug_level():
     global _debug_level
     if _debug_level is None:
-        _debug_level = 3
+        _debug_level = get_config('global', 'verbose', type_=int)
     return _debug_level
 
 

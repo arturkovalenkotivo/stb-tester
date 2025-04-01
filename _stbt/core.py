@@ -1,4 +1,3 @@
-# coding: utf-8
 """Main stb-tester python module. Intended to be used with `stbt run`.
 
 See `man stbt` and http://stb-tester.com for documentation.
@@ -8,9 +7,12 @@ License: LGPL v2.1 or (at your option) any later version (see
 https://github.com/stb-tester/stb-tester/blob/master/LICENSE for details).
 """
 
+from __future__ import annotations
+
 import argparse
 import datetime
 import sys
+import typing
 import threading
 import warnings
 import weakref
@@ -20,23 +22,30 @@ from enum import Enum
 
 import cv2
 import gi
+import numpy as np
 
-import _stbt.cv2_compat as cv2_compat
+from _stbt import cv2_compat
 from _stbt import logging
 from _stbt.config import get_config
 from _stbt.gst_utils import array_from_sample, gst_sample_make_writable
-from _stbt.imgutils import _frame_repr, Frame
-from _stbt.logging import _Annotation, ddebug, debug, warn
-from _stbt.types import NoVideo, Region
+from _stbt.imgutils import Frame
+from _stbt.logging import _Annotation, debug, warn
+from _stbt.types import Keypress, NoVideo, Region
 from _stbt.utils import to_unicode
+from _stbt.audioutils import AudioSegment
 
 gi.require_version("Gst", "1.0")
 from gi.repository import GLib, Gst  # pylint:disable=wrong-import-order
 
 Gst.init(None)
 
+if typing.TYPE_CHECKING:
+    # pylint:disable=unused-import
+    from _stbt.control import RemoteControl
+    # pylint:enable=unused-import
+
 warnings.filterwarnings(
-    action="always", category=DeprecationWarning, message='.*stb-tester')
+    action="default", category=DeprecationWarning, module=r"_stbt")
 
 
 # Functions available to stbt scripts
@@ -67,6 +76,7 @@ def new_device_under_test_from_config(parsed_args=None):
 
     def raise_in_user_thread(exception):
         display[0].tell_user_thread(exception)
+
     mainloop = _mainloop()
 
     if not args.sink_pipeline and not args.save_video:
@@ -75,7 +85,7 @@ def new_device_under_test_from_config(parsed_args=None):
         sink_pipeline = SinkPipeline(  # pylint: disable=redefined-variable-type
             args.sink_pipeline, raise_in_user_thread, args.save_video)
 
-    display[0] = Display(args.source_pipeline, sink_pipeline)
+    display[0] = Display(args.source_pipeline, sink_pipeline, args.audio_pipeline)
     return DeviceUnderTest(
         display=display[0], control=uri_to_control(args.control, display[0]),
         sink_pipeline=sink_pipeline, mainloop=mainloop)
@@ -86,13 +96,13 @@ class DeviceUnderTest():
                  mainloop=None, _time=None):
         if _time is None:
             import time as _time
-        self._time_of_last_press = None
-        self._display = display
-        self._control = control
-        self._sink_pipeline = sink_pipeline
-        self._mainloop = mainloop
+        self._time_of_last_press: float = 0
+        self._display: Display = display
+        self._control: RemoteControl = control
+        self._sink_pipeline: SinkPipeline = sink_pipeline
+        self._mainloop: typing.ContextManager[None] = mainloop
         self._time = _time
-        self._last_keypress = None
+        self._last_keypress: Keypress | None = None
 
     def __enter__(self):
         if self._display:
@@ -117,6 +127,10 @@ class DeviceUnderTest():
     def press(self, key, interpress_delay_secs=None, hold_secs=None):
         if isinstance(key, Enum):
             key = key.value
+        if section := get_config("control", "keymap_section", None):
+            mapped_key = get_config(section, key, default=key)
+        else:
+            mapped_key = key
 
         if hold_secs is not None and hold_secs > 60:
             # You must ensure that lircd's --repeat-max is set high enough.
@@ -128,8 +142,8 @@ class DeviceUnderTest():
                     frame_before = None
                 else:
                     frame_before = self.get_frame()
-                out = _Keypress(key, self._time.time(), None, frame_before)
-                self._control.press(key)
+                out = Keypress(key, self._time.time(), None, frame_before)
+                self._control.press(mapped_key)
                 out.end_time = self._time.time()
             self.draw_text(key, duration_secs=3)
             self._last_keypress = out
@@ -143,25 +157,29 @@ class DeviceUnderTest():
     def pressing(self, key, interpress_delay_secs=None):
         if isinstance(key, Enum):
             key = key.value
+        if section := get_config("control", "keymap_section", None):
+            mapped_key = get_config(section, key, default=key)
+        else:
+            mapped_key = key
 
         with self._interpress_delay(interpress_delay_secs):
-            out = _Keypress(key, self._time.time(), None, self.get_frame())
+            out = Keypress(key, self._time.time(), None, self.get_frame())
             try:
-                self._control.keydown(key)
+                self._control.keydown(mapped_key)
                 self.draw_text("Holding %s" % key, duration_secs=3)
                 self._last_keypress = out
                 yield out
-            except:  # pylint:disable=bare-except
+            except:
                 exc_info = sys.exc_info()
                 try:
-                    self._control.keyup(key)
+                    self._control.keyup(mapped_key)
                     self.draw_text("Released %s" % key, duration_secs=3)
                 except Exception:  # pylint:disable=broad-except
                     # Don't mask original exception from the test script.
                     pass
                 raise exc_info[1].with_traceback(exc_info[2])
             else:
-                self._control.keyup(key)
+                self._control.keyup(mapped_key)
                 out.end_time = self._time.time()
                 self.draw_text("Released %s" % key, duration_secs=3)
 
@@ -170,23 +188,21 @@ class DeviceUnderTest():
         if interpress_delay_secs is None:
             interpress_delay_secs = get_config(
                 "press", "interpress_delay_secs", type_=float)
-        if self._time_of_last_press is not None:
-            # `sleep` is inside a `while` loop because the actual suspension
-            # time of `sleep` may be less than that requested.
-            while True:
-                seconds_to_wait = (
-                    self._time_of_last_press - datetime.datetime.now() +
-                    datetime.timedelta(seconds=interpress_delay_secs)
-                ).total_seconds()
-                if seconds_to_wait > 0:
-                    self._time.sleep(seconds_to_wait)
-                else:
-                    break
+        # `sleep` is inside a `while` loop because the actual suspension
+        # time of `sleep` may be less than that requested.
+        while True:
+            seconds_to_wait = (
+                    self._time_of_last_press - self._time.time() +
+                    interpress_delay_secs)
+            if seconds_to_wait > 0:
+                self._time.sleep(seconds_to_wait)
+            else:
+                break
 
         try:
             yield
         finally:
-            self._time_of_last_press = datetime.datetime.now()
+            self._time_of_last_press = self._time.time()
 
     def draw_text(self, text, duration_secs=3):
         self._sink_pipeline.draw(text, duration_secs)
@@ -211,19 +227,15 @@ class DeviceUnderTest():
         if match_parameters is None:
             match_parameters = MatchParameters()
 
-        i = 0
-
-        while True:
+        for i in range(max_presses + 1):
             try:
                 return wait_for_match(image, timeout_secs=interval_secs,
                                       match_parameters=match_parameters,
                                       region=region, frames=self.frames())
             except MatchTimeout:
-                if i < max_presses:
-                    self.press(key)
-                    i += 1
-                else:
+                if i == max_presses:
                     raise
+            self.press(key)
 
     def frames(self, timeout_secs=None):
         if timeout_secs is not None:
@@ -232,10 +244,8 @@ class DeviceUnderTest():
         first = True
 
         while True:
-            ddebug("user thread: Getting sample at %s" % self._time.time())
             frame = self._display.get_frame(
                 max(10, timeout_secs or 0), since=timestamp)
-            ddebug("user thread: Got sample at %s" % self._time.time())
             timestamp = frame.time
 
             if not first and timeout_secs is not None and timestamp > end_time:
@@ -250,20 +260,6 @@ class DeviceUnderTest():
             raise RuntimeError(
                 "stbt.get_frame(): Video capture has not been initialised")
         return self._display.get_frame()
-
-
-class _Keypress():
-    def __init__(self, key, start_time, end_time, frame_before):
-        self.key = key
-        self.start_time = start_time
-        self.end_time = end_time
-        self.frame_before = frame_before
-
-    def __repr__(self):
-        return (
-            "_Keypress(key=%r, start_time=%r, end_time=%r, frame_before=%s)" % (
-                self.key, self.start_time, self.end_time,
-                _frame_repr(self.frame_before)))
 
 
 # stbt-run initialisation and convenience functions
@@ -514,7 +510,7 @@ class SinkPipeline():
             # appsrc is backed-up, perhaps something's gone wrong.  We don't
             # want to use up all RAM, so let's drop the buffer on the floor.
             if not self._appsrc_was_full:
-                debug("sink pipeline appsrc is full, dropping buffers from now on")
+                warn("sink pipeline appsrc is full, dropping buffers from now on")
                 self._appsrc_was_full = True
             return
         elif self._appsrc_was_full:
@@ -530,13 +526,17 @@ class SinkPipeline():
             if isinstance(obj, str):
                 start_time = self._time.time()
                 text = (
-                    to_unicode(
-                        datetime.datetime.fromtimestamp(start_time).strftime(
-                            "%H:%M:%S.%f")[:-4]) +
-                    ' ' +
-                    to_unicode(obj))
+                        to_unicode(
+                            datetime.datetime.fromtimestamp(start_time).strftime(
+                                "%H:%M:%S.%f")[:-4]) +
+                        ' ' +
+                        to_unicode(obj))
                 self.text_annotations.append(
                     _TextAnnotation(start_time, text, duration_secs))
+            elif isinstance(obj, logging.SourceRegion):
+                # Backwards compatibility.  Consider changing this in the
+                # future.
+                pass
             elif hasattr(obj, "region") and hasattr(obj, "time"):
                 annotation = _Annotation.from_result(obj, label=label)
                 if annotation.time:
@@ -552,6 +552,7 @@ class NoSinkPipeline():
     faster because it doesn't do anything.  It especially doesn't do any copying
     nor video encoding :).
     """
+
     def __enter__(self):
         pass
 
@@ -569,7 +570,7 @@ class NoSinkPipeline():
 
 
 class Display():
-    def __init__(self, user_source_pipeline, sink_pipeline):
+    def __init__(self, user_source_pipeline, sink_pipeline, user_audio_source_pipeline=None):
 
         import time
 
@@ -579,11 +580,14 @@ class Display():
         self.source_pipeline = None
         self.init_time = time.time()
         self.tearing_down = False
+        self._audio_structure = {}
+        self._audio_enabled = False
 
-        appsink = (
-            "appsink name=appsink max-buffers=1 drop=false sync=true "
+        app_video_sink = (
+            "appsink name=app_video_sink max-buffers=1 drop=false sync=true "
             "emit-signals=true "
             "caps=video/x-raw,format=BGR")
+        app_audio_sink = "appsink name=app_audio_sink emit-signals=true sync=true max-buffers=10 drop=false"
         # Notes on the source pipeline:
         # * _stbt_raw_frames_queue is kept small to reduce the amount of slack
         #   (and thus the latency) of the pipeline.
@@ -601,7 +605,14 @@ class Display():
             'queue name=_stbt_raw_frames_queue max-size-buffers=2',
             'videoconvert',
             'video/x-raw,format=BGR',
-            appsink])
+            app_video_sink])
+
+        if user_audio_source_pipeline:
+            audio_pipeline = " ! ".join([user_audio_source_pipeline, app_audio_sink])
+            self.source_pipeline_description += f"    {audio_pipeline}"
+            self._audio_enabled = True
+
+        self._audio_queue = deque()
         self.create_source_pipeline()
 
         self._sink_pipeline = sink_pipeline
@@ -616,8 +627,12 @@ class Display():
         source_bus.connect("message::warning", self.on_warning)
         source_bus.connect("message::eos", self.on_eos_from_source_pipeline)
         source_bus.add_signal_watch()
-        appsink = self.source_pipeline.get_by_name("appsink")
+        appsink = self.source_pipeline.get_by_name("app_video_sink")
         appsink.connect("new-sample", self.on_new_sample)
+
+        if self._audio_enabled:
+            app_audio_sink = self.source_pipeline.get_by_name("app_audio_sink")
+            app_audio_sink.connect("new-sample", self.on_new_audio_sample)
 
         # A realtime clock gives timestamps compatible with time.time()
         self.source_pipeline.use_clock(
@@ -629,7 +644,7 @@ class Display():
             # This is a live source, drop frames if we get behind
             self.source_pipeline.get_by_name('_stbt_raw_frames_queue') \
                 .set_property('leaky', to_unicode('downstream'))
-            self.source_pipeline.get_by_name('appsink') \
+            self.source_pipeline.get_by_name('app_video_sink') \
                 .set_property('sync', False)
 
         self.source_pipeline.set_state(Gst.State.PLAYING)
@@ -679,23 +694,72 @@ class Display():
         frame = array_from_sample(sample)
         frame.flags.writeable = False
 
+        audio_chunks = []
+        audio_chunks_pts = []
+        while len(self._audio_queue):
+            audio_pts, audio_data = self._audio_queue.popleft()
+            if audio_pts <= sample.time:
+                audio_chunks.append(audio_data)
+                audio_chunks_pts.append(audio_pts)
+            else:
+                # self._audio_queue.appendleft((audio_pts, audio_data))  # Put back the last unmatched audio
+                break
+        if audio_chunks:
+            combined_chunks = b"".join(audio_chunks)
+            audio = AudioSegment(
+                data=combined_chunks,
+                begin=audio_chunks_pts[0],
+                end=audio_chunks_pts[-1],
+                **self._audio_structure,
+            )
+        else:
+            audio = None
+
+        setattr(frame, "audio", audio)
         # See also: logging.draw_on
         frame._draw_sink = weakref.ref(self._sink_pipeline)
         self.tell_user_thread(frame)
         self._sink_pipeline.on_sample(sample)
         return Gst.FlowReturn.OK
 
+    def on_new_audio_sample(self, appsink):
+        sample = appsink.emit("pull-sample")
+        running_time = sample.get_segment().to_running_time(
+            Gst.Format.TIME, sample.get_buffer().pts)
+        sample.time = float(appsink.base_time + running_time) / 1e9
+
+        if (sample.time > self.init_time + 31536000 or
+                sample.time < self.init_time - 31536000):  # 1 year
+            warn("Received frame with suspicious timestamp: %f. Check your "
+                 "source-pipeline configuration." % sample.time)
+        buffer = sample.get_buffer()
+        success, map_info = buffer.map(Gst.MapFlags.READ)
+        if success:
+            audio_data = map_info.data
+            buffer.unmap(map_info)
+            self._audio_queue.append((sample.time, audio_data))
+        if not self._audio_structure:
+            caps = sample.get_caps()
+            structure = caps.get_structure(0)
+            frame_rate = structure.get_int("rate")[1]
+            channels = structure.get_int("channels")[1]
+            _format = structure.get_string("format")
+            if "16" in _format:
+                sample_width = 2
+            elif "32" in _format:
+                sample_width = 4
+            else:
+                sample_width = 1
+            self._audio_structure = {"frame_rate": frame_rate,
+                                     "channels": channels,
+                                     "sample_width": sample_width,
+                                     }
+        return Gst.FlowReturn.OK
+
     def tell_user_thread(self, frame_or_exception):
         # `self.last_frame` is how we communicate from this thread (the GLib
         # main loop) to the main application thread running the user's script.
         # Note that only this thread writes to self.last_frame.
-
-        if isinstance(frame_or_exception, Exception):
-            ddebug("glib thread: reporting exception to user thread: %s" %
-                   frame_or_exception)
-        else:
-            ddebug("glib thread: new sample (time=%s)." %
-                   frame_or_exception.time)
 
         with self._condition:
             self.last_frame = frame_or_exception
@@ -731,6 +795,7 @@ class Display():
         def on_eos(_appsink):
             done.set()
             return True
+
         hid = appsink.connect('eos', on_eos)
         d = appsink.get_property('eos') or done.wait(timeout)
         appsink.disconnect(hid)

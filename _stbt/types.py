@@ -442,3 +442,17 @@ class UITestFailure(Exception):
 class NoVideo(Exception):
     """No video available from the source pipeline."""
     pass
+
+
+class Keypress():
+    def __init__(self, key, start_time, end_time, frame_before):
+        self.key = key
+        self.start_time = start_time
+        self.end_time = end_time
+        self.frame_before = frame_before
+
+    def __repr__(self):
+        return (
+            "Keypress(key=%r, start_time=%r, end_time=%r, frame_before=%s)" % (
+                self.key, self.start_time, self.end_time,
+                f"<Frame(time={self.frame_before.time})>"))

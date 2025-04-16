@@ -63,13 +63,16 @@ setup(
     package_data={
         "_stbt": ["stbt.conf", "sqdiff.c", "xorg.conf.in", "xxhash.c", "xxhash.h"],  # , "libstbt.so", "libxxhash.so",
     },
+    data_files=[
+        ("", ["requirements.txt"]),
+    ],
     ext_modules=extensions,
     classifiers=[
         # pylint:disable=line-too-long
         "Development Status :: 5 - Production/Stable",
         "License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)",
-        "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3.6",
+        "Operating System :: MacOS, Ubuntu 22.04",
+        "Programming Language :: Python :: 3.9",
         "Topic :: Software Development :: Testing",
     ],
     python_requires=">=3.9",

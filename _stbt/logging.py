@@ -1,9 +1,9 @@
-# coding: utf-8
-
 import argparse
 import itertools
+import logging
 import os
 import sys
+import typing
 from collections import namedtuple, OrderedDict
 from contextlib import contextmanager
 from textwrap import dedent
@@ -12,26 +12,45 @@ from .config import get_config
 from .types import Region
 from .utils import mkdir_p
 
+if typing.TYPE_CHECKING:
+    from _stbt.core import SinkPipeline
+
+
 _debug_level = None
 
 # Running in a Jupyter Notebook:
 _jupyter_logging_enabled = "JPY_PARENT_PID" in os.environ
 
+logger = logging.getLogger("stbt")
+trace_logger = logging.getLogger("stbt.trace")
 
-def debug(msg):
+
+def init_logger():
+    if logger.handlers:
+        logger.warning("stbt logger already initialised", stack_info=True)
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(
+        logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+
+
+def debug(msg: str, *args, **kwargs):
     """Print the given string to stderr if stbt run `--verbose` was given."""
     if get_debug_level() > 0:
-        sys.stderr.write("%s\n" % (msg,))
+        logger.debug(msg, *args, **kwargs)
 
 
 def ddebug(s):
     """Extra verbose debug for stbt developers, not end users"""
     if get_debug_level() > 1:
-        sys.stderr.write("%s\n" % (s,))
+        trace_logger.debug(s)
 
 
-def warn(s):
-    sys.stderr.write("warning: %s\n" % (s,))
+def warn(msg: str, *args, **kwargs):
+    logger.warning(msg, *args, **kwargs)
 
 
 def get_debug_level():
@@ -65,12 +84,11 @@ def argparser_add_verbose_argument(argparser):
     argparser.add_argument(
         '-v', '--verbose', action=IncreaseDebugLevel, nargs=0,
         default=get_debug_level(),  # for stbt-run arguments dump
-        help='Enable debug output (specify twice to enable GStreamer element '
-             'dumps to ./stbt-debug directory)')
+        help='Enable debug output (specify twice to enable detailed dumps to ./stbt-debug directory)')
 
 
 def imshow(img, regions=None):
-    """Displays the image in a Jupyter Notebook Notebook.
+    """Displays the image in a Jupyter Notebook.
 
     You can only call this if you're already inside a Jupyter Notebook.
     """
@@ -86,7 +104,7 @@ def imshow(img, regions=None):
         for r in regions:
             cv2.rectangle(img, (r.x, r.y), (r.right, r.bottom), (32, 0, 255))
 
-    from IPython.core.display import Image, display  # pylint:disable=import-error
+    from IPython.core.display import Image, display
     if isinstance(img, str):
         display(Image(img))
     else:
@@ -115,8 +133,7 @@ class ImageLogger():
             mkdir_p(outdir)
             self.outdir = outdir
         except OSError:
-            warn("Failed to create directory '%s'; won't save debug images."
-                 % outdir)
+            warn("Failed to create directory '%s'; won't save debug images." % outdir)
             self.enabled = False
             return
 
@@ -189,24 +206,21 @@ class ImageLogger():
         template_kwargs.update(kwargs)
 
         index_html = os.path.join(self.outdir, "index.html")
-        try:
-            with open(index_html, "w") as f:
-                f.write(jinja2.Template(_INDEX_HTML_HEADER)
-                        .render(frame_number=self.frame_number,
-                                jupyter=self.jupyter))
-                f.write(jinja2.Template(dedent(template.lstrip("\n")))
-                        .render(annotated_image=self._draw_annotated_image,
-                                draw=self._draw,
-                                jupyter=self.jupyter,
-                                **template_kwargs))
-                f.write(jinja2.Template(_INDEX_HTML_FOOTER)
-                        .render())
+        with open(index_html, "w", encoding="utf-8") as f:
+            f.write(jinja2.Template(_INDEX_HTML_HEADER)
+                    .render(frame_number=self.frame_number,
+                            jupyter=self.jupyter))
+            f.write(jinja2.Template(dedent(template.lstrip("\n")))
+                    .render(annotated_image=self._draw_annotated_image,
+                            draw=self._draw,
+                            jupyter=self.jupyter,
+                            **template_kwargs))
+            f.write(jinja2.Template(_INDEX_HTML_FOOTER)
+                    .render())
 
-            if self.jupyter:
-                from IPython.display import display, IFrame  # pylint:disable=import-error
-                display(IFrame(src=index_html, width=974, height=600))
-        except Exception as err:
-            print("imglog.html  --{}".format(err))
+        if self.jupyter:
+            from IPython.display import display, IFrame
+            display(IFrame(src=index_html, width=974, height=600))
 
     def _draw(self, region, source_size, css_class, title=None):
         import jinja2
@@ -247,17 +261,21 @@ class ImageLogger():
             _regions.append((Region.intersect(self.data["region"], source_size),
                              "source_region", None))
 
-        if isinstance(regions, Region):
-            _regions.append((regions, True, None))
-        elif hasattr(regions, "region"):  # e.g. MotionResult
-            _regions.append((regions.region, bool(regions), None))
-        elif regions is not None:
-            for r in regions:
-                if not isinstance(r, tuple) or len(r) != 3:
-                    raise ValueError(
-                        "_draw_annotated_image expected 3-tuple "
-                        "(region, css_class, title); got %r" % (r,))
+        if regions is None:
+            regions = []
+        elif not isinstance(regions, list):
+            regions = [regions]
+        for r in regions:
+            if isinstance(r, Region):
+                _regions.append((r, True, None))
+            elif hasattr(r, "region"):  # e.g. MotionResult
+                _regions.append((r.region, bool(r), None))
+            elif isinstance(r, tuple) and len(r) == 3:
                 _regions.append(r)
+            else:
+                warn("ImageLogger._draw_annotated_image: Expected Region, "
+                     "Match/MotionResult, or 3-tuple (region, css_class, title)"
+                     "; got %r" % (r,))
 
         return jinja2.Template(dedent("""\
             <div class="annotated_image">
@@ -274,7 +292,7 @@ class ImageLogger():
         )
 
 
-_INDEX_HTML_HEADER = dedent(u"""\
+_INDEX_HTML_HEADER = dedent("""\
     <!DOCTYPE html>
     <html lang='en'>
     <head>
@@ -312,7 +330,7 @@ _INDEX_HTML_HEADER = dedent(u"""\
     {% endif %}
     """)
 
-_INDEX_HTML_FOOTER = dedent(u"""\
+_INDEX_HTML_FOOTER = dedent("""\
 
     </div>
     </body>
@@ -320,31 +338,36 @@ _INDEX_HTML_FOOTER = dedent(u"""\
 """)
 
 
-def test_that_debug_can_write_unicode_strings():
-    def test(level):
-        with scoped_debug_level(level):
-            warn(u'Prüfungs Debug-Unicode')
-            debug(u'Prüfungs Debug-Unicode')
-            ddebug(u'Prüfungs Debug-Unicode')
-    for level in [0, 1, 2]:
-        yield (test, level)
-
-
 def draw_on(frame, *args, **kwargs):
     draw_sink_ref = getattr(frame, '_draw_sink', None)
     if not draw_sink_ref:
         return
-    draw_sink = draw_sink_ref()
+    draw_sink: "SinkPipeline | None" = draw_sink_ref()
     if not draw_sink:
         return
     draw_sink.draw(*args, **kwargs)
 
 
+def draw_source_region(frame, region):
+    draw_on(frame, SourceRegion(region, getattr(frame, "time", None)))
+
+
+class SourceRegion(typing.NamedTuple):
+    region: Region
+    time: "float | None"
+
+
 class _Annotation(namedtuple("_Annotation", "time region label colour")):
     MATCHED = (32, 0, 255)  # Red
     NO_MATCH = (32, 255, 255)  # Yellow
+    SOURCE_REGION = (255, 128, 128)  # Blue
 
     @staticmethod
     def from_result(result, label=""):
-        colour = _Annotation.MATCHED if result else _Annotation.NO_MATCH
+        if isinstance(result, SourceRegion):
+            colour = _Annotation.SOURCE_REGION
+        elif result:
+            colour = _Annotation.MATCHED
+        else:
+            colour = _Annotation.NO_MATCH
         return _Annotation(result.time, result.region, label, colour)

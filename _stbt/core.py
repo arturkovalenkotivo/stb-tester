@@ -87,7 +87,7 @@ def new_device_under_test_from_config(parsed_args=None):
         sink_pipeline = SinkPipeline(  # pylint: disable=redefined-variable-type
             args.sink_pipeline, raise_in_user_thread, args.save_video)
 
-    display[0] = Display(args.source_pipeline, sink_pipeline, args.audio_device)
+    display[0] = Display(args.source_pipeline, sink_pipeline, args.audio_pipeline)
     return DeviceUnderTest(
         display=display[0], control=uri_to_control(args.control, display[0]),
         sink_pipeline=sink_pipeline, mainloop=mainloop)
@@ -615,8 +615,8 @@ class Display():
             app_video_sink])
 
         if user_audio_source_pipeline:
-            audio_device = " ! ".join([user_audio_source_pipeline, app_audio_sink])
-            self.source_pipeline_description += f"    {audio_device}"
+            audio_pipeline = " ! ".join([user_audio_source_pipeline, app_audio_sink])
+            self.source_pipeline_description += f"    {audio_pipeline}"
             self._audio_enabled = True
 
         self._audio_queue = deque()

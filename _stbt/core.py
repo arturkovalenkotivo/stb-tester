@@ -67,6 +67,8 @@ def new_device_under_test_from_config(parsed_args=None):
         args.source_pipeline = get_config('global', 'source_pipeline')
     if args.sink_pipeline is None:
         args.sink_pipeline = get_config('global', 'sink_pipeline')
+    if args.audio_pipeline is None:
+        args.audio_pipeline = get_config('global', 'audio_pipeline')
     if args.control is None:
         args.control = get_config('global', 'control')
     if args.save_video is None:
@@ -281,6 +283,11 @@ def argparser():
         '--sink-pipeline',
         default=get_config('global', 'sink_pipeline'),
         help='A gstreamer pipeline to use for video output '
+             '(default: %(default)s)')
+    parser.add_argument(
+        '--audio-pipeline',
+        default=get_config('global', 'audio_pipeline'),
+        help='A gstreamer pipeline to use for audio output '
              '(default: %(default)s)')
     parser.add_argument(
         '--save-video', help='Record video to the specified file',

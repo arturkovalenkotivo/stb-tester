@@ -31,7 +31,15 @@ This package doesn't bundle the Tesseract OCR engine, so `ocr()` and
 [LICENSE]: https://github.com/stb-tester/stb-tester/blob/master/LICENSE
 [Stb-tester Platform]: https://stb-tester.com
 """
-extentions = [Extension('_stbt.libstbt',
+
+
+def parse_requirements(filename):
+    with open(filename, 'r') as f:
+        lines = f.read().splitlines()
+    return [line.strip() for line in lines if line.strip() and not line.startswith('#') and not line.startswith('-')]
+
+
+extensions = [Extension('_stbt.libstbt',
                         sources=['_stbt/sqdiff.c'],
                         extra_compile_args=["-std=c99"],
                         ),
@@ -41,6 +49,7 @@ extentions = [Extension('_stbt.libstbt',
                         extra_compile_args=["-std=c99"],
                         )
               ]
+
 setup(
     name="stbt_core",
     version="134.0.1",
@@ -54,7 +63,7 @@ setup(
     package_data={
         "_stbt": ["stbt.conf", "sqdiff.c", "xorg.conf.in", "xxhash.c", "xxhash.h"],  # , "libstbt.so", "libxxhash.so",
     },
-    ext_modules=extentions,
+    ext_modules=extensions,
     classifiers=[
         # pylint:disable=line-too-long
         "Development Status :: 5 - Production/Stable",
@@ -65,19 +74,8 @@ setup(
     ],
     python_requires=">=3.9",
     extras_require={
-        "ocr": ["lxml==4.8.0"],
         "debug": ["Jinja2==3.0.3"],
         "keyboard": ["networkx==2.4"],
     },
-    install_requires=[
-        "astroid==2.11.6",
-        "attrs==22.2.0",
-        "isort==5.6.4",
-        "opencv-python~=4.5",
-        "pylint~=2.13.0",
-        "PyGObject==3.38.0",
-        "scikit-build",
-        "pycairo",
-        "requests",
-    ],
+    install_requires=parse_requirements('requirements.txt'),
 )

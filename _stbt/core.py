@@ -258,6 +258,14 @@ class DeviceUnderTest():
             first = False
 
     def get_frame(self):
+        """
+        Returns the most recent frame from the display.
+        if audio is enabled, the audio segment will be attached to the frame.
+        audio segment can be None if no audio is received (slow frame rate).
+        audio segment is from the past relating to the video frame.
+        audio time deviation depends on video frame rate for example for 30 fps audio time deviation is
+         from -33ms to 0ms
+        """
         if self._display is None:
             raise RuntimeError(
                 "stbt.get_frame(): Video capture has not been initialised")
@@ -709,7 +717,7 @@ class Display():
                 audio_chunks.append(audio_data)
                 audio_chunks_pts.append(audio_pts)
             else:
-                # self._audio_queue.appendleft((audio_pts, audio_data))  # Put back the last unmatched audio
+                self._audio_queue.appendleft((audio_pts, audio_data))  # Put back the last unmatched audio
                 break
         if audio_chunks:
             combined_chunks = b"".join(audio_chunks)
@@ -737,8 +745,8 @@ class Display():
 
         if (sample.time > self.init_time + 31536000 or
                 sample.time < self.init_time - 31536000):  # 1 year
-            warn("Received frame with suspicious timestamp: %f. Check your "
-                 "source-pipeline configuration." % sample.time)
+            warn("Received audio frame with suspicious timestamp: %f. Check your "
+                 "audio source-pipeline configuration." % sample.time)
         buffer = sample.get_buffer()
         success, map_info = buffer.map(Gst.MapFlags.READ)
         if success:

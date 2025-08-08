@@ -5,7 +5,7 @@ attrs==22.2.0
 isort==5.6.4
 jinja2
 lxml~=4.8
-opencv-python~=4.5
+opencv-python
 pycairo
 pydub
 pylint~=2.13.0

@@ -52,7 +52,7 @@ extensions = [Extension('_stbt.libstbt',
 
 setup(
     name="stbt_core",
-    version="134.0.1",
+    version="134.0.2",
     author="Stb-tester.com Ltd.",
     author_email="support@stb-tester.com",
     description="Automated GUI testing for Set-Top Boxes, with MacOS and Linux MOD",

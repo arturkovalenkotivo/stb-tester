@@ -30,3 +30,5 @@ TAGS
 tests/stbt-debug-expected-output/*/*/*.png
 tests/test-install
 VERSION
+.idea
+build/
